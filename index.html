@@ -27,8 +27,10 @@
 
   <script type="module">
     // ======= CONFIG =======
-    // Zet hier jouw bestand. Aanbevolen: 3MF uit Fusion (units mm).
-    const DEFAULT_MODEL = 'models/warmtekamer.3mf';
+    // Je repo lijkt de map-structuur te hebben: /index.html en /warmtekamer-viewer/models/...
+    // Daarom wijzen we standaard naar dit pad. Als je 'models/' naast index.html zet,
+    // verander dit dan naar 'models/warmtekamer.3mf'.
+    const DEFAULT_MODEL = 'warmtekamer-viewer/models/warmtekamer.3mf';
     // ======================
 
     const statusEl = document.getElementById('status');
@@ -99,7 +101,6 @@
     function guessUnits(obj, ext){
       // 3MF vanuit Fusion = mm → schaal 0.001
       if(ext==='3mf'){ obj.scale.setScalar(0.001); return; }
-      // STL kan absurd groot/klein zijn; normaliseer achteraf toch nog eens
     }
 
     // === Loaders
@@ -125,9 +126,7 @@
       else if(ext==='stl') obj = await loadSTL(url);
       else if(ext==='glb' || ext==='gltf') obj = await loadGLB(url);
       else throw new Error('Niet-ondersteund type (gebruik .3mf / .stl / .glb)');
-      // Materiaal:
-      if(ext==='stl') applyDefaultMat(obj); // 3MF/GLB behouden eigen materialen
-      // Units & normaliseren:
+      if(ext==='stl') applyDefaultMat(obj);
       guessUnits(obj, ext);
       normalizeScale(obj, 1.0);
       centerPivot(obj);
@@ -141,15 +140,13 @@
       const grp=new THREE.Group(); grp.add(m);
       root.add(grp);
       centerPivot(root); fit(root,1.4);
-      // kleine draai zodat je ziet dat de renderloop werkt
       (function spin(){ m.rotation.y += 0.01; requestAnimationFrame(spin); })();
     }
 
-    // === Start
     (async ()=>{
       try{
-        // check of het bestand bereikbaar is
         const abs = new URL(DEFAULT_MODEL, location.href).href;
+        nameEl.textContent = abs;
         const head = await fetch(abs, {method:'GET'});
         if(!head.ok) throw new Error(`Kan model niet bereiken (${head.status})`);
         const obj = await loadModel(abs);
@@ -163,20 +160,17 @@
       }
     })();
 
-    // === UI
     document.getElementById('fitBtn').onclick  = ()=> fit(root,1.2);
     document.getElementById('wireBtn').onclick = ()=>{
       wire=!wire; root.traverse(o=>{ if(o.isMesh && o.material) o.material.wireframe = wire; });
     };
 
-    // === Resize & render
     addEventListener('resize', ()=>{
       camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
     });
     (function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); })();
 
-    // Log window errors zichtbaar in status
     addEventListener('error', (e)=> setStatus('JS error: ' + e.message, false));
   </script>
 </body>
