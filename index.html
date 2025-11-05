@@ -3,44 +3,82 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Warmtekamer – 3D Viewer (Read-only)</title>
+  <title>Warmtekamer – 3D Viewer (debug)</title>
   <style>
     html,body {height:100%; margin:0; background:#0c0f14; color:#e6e6e6; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
     .wrap {position:fixed; inset:0; display:grid; grid-template-rows:auto 1fr}
-    header {padding:12px 16px; backdrop-filter: blur(6px); background:rgba(12,15,20,.5); border-bottom:1px solid rgba(255,255,255,.08)}
-    header h1 {margin:0; font-size:14px; font-weight:600;}
+    header {padding:10px 14px; backdrop-filter: blur(6px); background:rgba(12,15,20,.6); border-bottom:1px solid rgba(255,255,255,.08); display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    header code {background:#101420; padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,.08)}
+    .ok {color:#9cffac} .bad {color:#ff9c9c}
     .viewer {width:100%; height:100%}
     .hint {position:fixed; left:16px; bottom:16px; font-size:12px; color:#a9b7d9; opacity:.9}
+    button {background:#1a2131; color:#e6eefc; border:1px solid #2b3a58; border-radius:8px; padding:6px 10px; cursor:pointer}
   </style>
-  <!-- ViewSTL plugin (laadt intern three.js) -->
   <script src="https://www.viewstl.com/plugin/viewstl.js"></script>
 </head>
 <body>
   <div class="wrap">
-    <header><h1>Warmtekamer – 3D Viewer (read-only)</h1></header>
+    <header>
+      <div>Probeert te laden van: <code id="pathShow"></code></div>
+      <div>Status: <span id="status">…</span></div>
+      <a id="directLink" target="_blank" style="margin-left:auto; font-size:12px; color:#9cc0ff">Open model direct ↗</a>
+      <button id="resetBtn" title="Reset view">Reset view</button>
+      <button id="wireBtn" title="Wireframe">Wireframe</button>
+    </header>
 
-    <!--
-      Read-only viewer:
-      - data-src wijst naar jouw STL in de repo (case-sensitive!)
-      - géén uploadknoppen aanwezig → bezoekers kunnen niks uploaden
-    -->
-    <div
-      class="viewstl viewer"
-      data-src="models/warmtekamer.stl"
-      data-smooth="1"
-      data-zoom="true"
-      data-pan="true"
-      data-rotate="true"
-      data-autorotate="false"
-      data-background="#0c0f14"
-      data-color="#bec7d5"
-      data-lightcolor="#ffffff"
-      data-metalness="0.15"
-      data-roughness="0.35"
-      data-grid="false">
+    <div id="viewer" class="viewstl viewer"
+         data-src=""
+         data-smooth="1"
+         data-rotate="true"
+         data-zoom="true"
+         data-pan="true"
+         data-grid="false"
+         data-background="#0c0f14"
+         data-color="#bec7d5"
+         data-metalness="0.15"
+         data-roughness="0.35">
     </div>
   </div>
 
   <div class="hint">Sleep = draaien · Scroll = zoomen · Rechtsklik = pannen</div>
+
+  <script>
+    // Zet hier je bestandsnaam. Let op: hoofd/kleine letters!
+    const MODEL_RELATIVE = 'models/warmtekamer.stl';
+
+    // Resolve naar een absolute URL vanaf je Pages site
+    const modelURL = new URL(MODEL_RELATIVE, location.href).href;
+
+    // Toon pad + link
+    document.getElementById('pathShow').textContent = MODEL_RELATIVE + '  →  ' + modelURL;
+    document.getElementById('directLink').href = modelURL;
+
+    // Laat ViewSTL het model gebruiken
+    const v = document.getElementById('viewer');
+    v.setAttribute('data-src', modelURL);
+
+    // Kleine HEAD/GET check om te zien of het bestand echt bereikbaar is
+    (async () => {
+      const statusEl = document.getElementById('status');
+      try {
+        // Sommige hosts blokkeren HEAD; dan doen we een GET met {method:'GET'}
+        const res = await fetch(modelURL, { method: 'GET' });
+        const ok = res.ok;
+        statusEl.textContent = ok ? `OK (${res.status})` : `Niet OK (${res.status})`;
+        statusEl.className = ok ? 'ok' : 'bad';
+      } catch (e) {
+        statusEl.textContent = 'Fetch error';
+        statusEl.className = 'bad';
+        console.error(e);
+      }
+    })();
+
+    // Knoppen
+    document.getElementById('resetBtn').onclick = () => document.querySelector('.viewstl').resetView?.();
+    document.getElementById('wireBtn').onclick  = () => document.querySelector('.viewstl').toggleWireframe?.();
+
+    // Extra: log viewer errors in console (mocht iets misgaan)
+    window.addEventListener('error', (e) => console.log('Window error:', e.message));
+  </script>
 </body>
 </html>
