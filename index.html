@@ -18,7 +18,7 @@
 </head>
 <body>
   <div id="app"></div>
-  <div class="topbar">Model: <code id="modelName">—</code> • Status: <span id="status">init…</span></div>
+  <div class="topbar">Model: <code id="modelName">models/warmtekamer.3mf</code> • Status: <span id="status">init…</span></div>
   <div class="btns">
     <button id="fitBtn">Fit</button>
     <button id="wireBtn">Wireframe</button>
@@ -26,29 +26,20 @@
   <div class="hint">Sleep = draaien · Scroll = zoomen · Rechtsklik = pannen</div>
 
   <script type="module">
-    // === Kandidaten (je hoeft niets te wijzigen) ===
-    const CANDIDATES = [
-      'warmtekamer-viewer/models/warmtekamer.3mf',
-      'warmtekamer-viewer/models/warmtekamer.glb',
-      'warmtekamer-viewer/models/warmtekamer.stl',
-      'models/warmtekamer.3mf',
-      'models/warmtekamer.glb',
-      'models/warmtekamer.stl',
-    ];
+    // ----- LAADPAD (niets aanpassen): we gaan uit van /models/ naast index.html
+    const PRIMARY = 'models/warmtekamer.3mf';
+    const FALLBACK_STL = 'models/warmtekamer.stl';
 
     const statusEl = document.getElementById('status');
     const nameEl   = document.getElementById('modelName');
 
-    // Imports
     import * as THREE from 'https://unpkg.com/three@0.160.1/build/three.module.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js';
     import { RoomEnvironment } from 'https://unpkg.com/three@0.160.1/examples/jsm/environments/RoomEnvironment.js';
     import { ThreeMFLoader } from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/3MFLoader.js';
     import { STLLoader }     from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/STLLoader.js';
-    import { GLTFLoader }    from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/GLTFLoader.js';
-    import { DRACOLoader }   from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/DRACOLoader.js';
 
-    // Renderer/scene/camera
+    // --- Renderer/scene/camera
     const container = document.getElementById('app');
     const renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
@@ -61,7 +52,6 @@
     scene.background = new THREE.Color(0x0c0f14);
     const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.001, 100000);
     camera.position.set(2.8,1.8,2.8);
-
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
@@ -73,7 +63,7 @@
     const root = new THREE.Group(); scene.add(root);
     let wire = false;
 
-    // Helpers
+    // --- Helpers
     const setStatus = (t, ok=true)=>{ statusEl.textContent=t; statusEl.className=ok?'ok':'bad'; };
     function bounds(obj){ const b=new THREE.Box3().setFromObject(obj);
       const s=new THREE.Vector3(), c=new THREE.Vector3(); b.getSize(s); b.getCenter(c);
@@ -88,68 +78,58 @@
       const c=new THREE.Vector3(); new THREE.Box3().setFromObject(obj).getCenter(c);
       controls.target.copy(c); camera.position.copy(c).addScaledVector(dir,dist);
       camera.near=Math.max(dist/1000,0.001); camera.far=dist*50+radius*10; camera.updateProjectionMatrix(); }
-    function applyDefaultMat(obj){
+    function applySTLMat(obj){
       const mat=new THREE.MeshStandardMaterial({color:0xbec7d5,metalness:.15,roughness:.35,side:THREE.DoubleSide});
       obj.traverse(o=>{ if(o.isMesh) o.material=mat; });
     }
 
-    // Loaders
     const load3MF = url => new Promise((res,rej)=> new ThreeMFLoader().load(url,res,undefined,rej));
     const loadSTL = url => new Promise((res,rej)=> new STLLoader().load(url,g=>{
       if(!g.hasAttribute('normal')) g.computeVertexNormals(); res(new THREE.Mesh(g)); },undefined,rej));
-    const loadGLB = url => {
-      const gltf=new GLTFLoader(), draco=new DRACOLoader();
-      draco.setDecoderPath('https://unpkg.com/three@0.160.1/examples/jsm/libs/draco/');
-      gltf.setDRACOLoader(draco);
-      return new Promise((res,rej)=> gltf.load(url, s=>res(s.scene),undefined,rej));
-    };
 
-    async function tryFetch(url){
-      const abs = new URL(url, location.href).href;
-      const r = await fetch(abs,{method:'GET'}); if(!r.ok) throw new Error(String(r.status));
+    async function exists(relPath){
+      const abs = new URL(relPath, document.baseURI).href;
+      const r = await fetch(abs,{method:'GET'});
+      if(!r.ok) return null;
       return abs;
     }
 
-    async function findFirstExisting(candidates){
-      for(const rel of candidates){
-        try{ const abs = await tryFetch(rel); return {abs, rel}; } catch(e){ /* try next */ }
+    async function loadModel(){
+      // 1) Probeer 3MF
+      let abs = await exists(PRIMARY);
+      if (abs){
+        nameEl.textContent = PRIMARY; setStatus('Laden (3mf)…');
+        const obj = await load3MF(abs);
+        // Fusion 3MF is in millimeters → schaalslag
+        obj.scale.setScalar(0.001);
+        normalizeScale(obj,1.0); centerPivot(obj);
+        return obj;
       }
-      throw new Error('Geen model gevonden op de bekende paden.');
-    }
-
-    async function loadModel(absUrl){
-      const ext = absUrl.split('.').pop().toLowerCase();
-      setStatus(`Laden (${ext})…`);
-      let obj;
-      if(ext==='3mf'){ obj = await load3MF(absUrl); obj.scale.setScalar(0.001); } // Fusion 3MF = mm
-      else if(ext==='glb'||ext==='gltf'){ obj = await loadGLB(absUrl); }
-      else if(ext==='stl'){ obj = await loadSTL(absUrl); applyDefaultMat(obj); }
-      else throw new Error('Niet-ondersteund type');
-      normalizeScale(obj, 1.0);
-      centerPivot(obj);
-      return obj;
-    }
-
-    function showFallback(){
-      const geo=new THREE.BoxGeometry(1,1,1);
-      const mat=new THREE.MeshStandardMaterial({color:0x66aaff,metalness:.2,roughness:.4});
-      const m=new THREE.Mesh(geo,mat); root.add(m); fit(root,1.4);
-      (function spin(){ m.rotation.y+=0.01; requestAnimationFrame(spin); })();
+      // 2) Fallback naar STL (alleen als aanwezig)
+      abs = await exists(FALLBACK_STL);
+      if (abs){
+        nameEl.textContent = FALLBACK_STL; setStatus('Laden (stl)…');
+        const obj = await loadSTL(abs);
+        applySTLMat(obj);
+        normalizeScale(obj,1.0); centerPivot(obj);
+        return obj;
+      }
+      throw new Error('Geen model gevonden. Plaats warmtekamer.3mf in /models/');
     }
 
     (async ()=>{
       try{
-        const {abs, rel} = await findFirstExisting(CANDIDATES);
-        nameEl.textContent = rel;
-        const obj = await loadModel(abs);
+        const obj = await loadModel();
         root.add(obj);
         fit(root,1.4);
         setStatus('Gereed', true);
       }catch(e){
         console.error(e);
-        nameEl.textContent = '—';
         setStatus('FOUT: ' + (e?.message||e), false);
-        showFallback();
+        // fallback visual zodat het nooit leeg is
+        const m=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),
+          new THREE.MeshStandardMaterial({color:0x66aaff,metalness:.2,roughness:.4}));
+        root.add(m); fit(root,1.4); (function spin(){ m.rotation.y+=0.01; requestAnimationFrame(spin); })();
       }
     })();
 
@@ -163,7 +143,6 @@
       renderer.setSize(innerWidth,innerHeight);
     });
     (function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); })();
-
     addEventListener('error', e=> setStatus('JS error: '+e.message,false));
   </script>
 </body>
