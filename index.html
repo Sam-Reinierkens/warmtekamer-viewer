@@ -3,13 +3,12 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Warmtekamer – 3D Viewer</title>
+  <title>Warmtekamer – 3D Viewer (3MF)</title>
   <style>
     html,body{height:100%;margin:0;background:#0c0f14;color:#e6e6e6;font-family:system-ui,Segoe UI,Roboto,Arial}
     #app{position:fixed;inset:0}
-    .topbar{position:fixed;left:12px;top:12px;z-index:10;background:rgba(20,24,33,.65);
+    .top{position:fixed;left:12px;top:12px;z-index:10;background:rgba(20,24,33,.65);
       border:1px solid rgba(255,255,255,.08);padding:8px 10px;border-radius:10px;font-size:12px}
-    .topbar code{background:#101420;border:1px solid rgba(255,255,255,.08);padding:1px 5px;border-radius:6px}
     .btns{position:fixed;right:12px;top:12px;z-index:10;display:flex;gap:8px}
     button{background:#1a2131;color:#e6eefc;border:1px solid #2b3a58;border-radius:10px;padding:8px 12px;cursor:pointer}
     .hint{position:fixed;left:12px;bottom:12px;font-size:12px;color:#a9b7d9}
@@ -18,28 +17,31 @@
 </head>
 <body>
   <div id="app"></div>
-  <div class="topbar">Model: <code id="modelName">models/warmtekamer.3mf</code> • Status: <span id="status">init…</span></div>
-  <div class="btns">
-    <button id="fitBtn">Fit</button>
-    <button id="wireBtn">Wireframe</button>
-  </div>
+  <div class="top">Model: <code id="modelName">models/warmtekamer.3mf</code> • Status: <span id="status">init…</span></div>
+  <div class="btns"><button id="fitBtn">Fit</button><button id="wireBtn">Wireframe</button></div>
   <div class="hint">Sleep = draaien · Scroll = zoomen · Rechtsklik = pannen</div>
 
   <script type="module">
-    // ----- LAADPAD (niets aanpassen): we gaan uit van /models/ naast index.html
-    const PRIMARY = 'models/warmtekamer.3mf';
-    const FALLBACK_STL = 'models/warmtekamer.stl';
+    // ---- BELANGRIJK: 3MF staat in /models naast index.html
+    const PATH_3MF = 'models/warmtekamer.3mf';
+    const PATH_STL = 'models/warmtekamer.stl'; // optionele fallback
 
     const statusEl = document.getElementById('status');
     const nameEl   = document.getElementById('modelName');
 
+    // Three.js + loaders
     import * as THREE from 'https://unpkg.com/three@0.160.1/build/three.module.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js';
     import { RoomEnvironment } from 'https://unpkg.com/three@0.160.1/examples/jsm/environments/RoomEnvironment.js';
     import { ThreeMFLoader } from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/3MFLoader.js';
     import { STLLoader }     from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/STLLoader.js';
 
-    // --- Renderer/scene/camera
+    // >>> Dit is de missing piece op iPhone/desktop:
+    import * as FFLATE from 'https://unpkg.com/fflate@0.8.2/esm/browser.js';
+    // ThreeMFLoader verwacht 'fflate' als globale namespace:
+    window.fflate = FFLATE;
+
+    // Renderer / scene / camera
     const container = document.getElementById('app');
     const renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
@@ -63,7 +65,7 @@
     const root = new THREE.Group(); scene.add(root);
     let wire = false;
 
-    // --- Helpers
+    // Helpers
     const setStatus = (t, ok=true)=>{ statusEl.textContent=t; statusEl.className=ok?'ok':'bad'; };
     function bounds(obj){ const b=new THREE.Box3().setFromObject(obj);
       const s=new THREE.Vector3(), c=new THREE.Vector3(); b.getSize(s); b.getCenter(c);
@@ -71,7 +73,7 @@
     function centerPivot(obj){ const {center}=bounds(obj); obj.position.sub(center); }
     function normalizeScale(obj,target=1){ const {radius}=bounds(obj);
       if(!isFinite(radius)||radius===0) return;
-      if(radius<0.001||radius>100){ const k=target/radius; obj.scale.setScalar(k); } }
+      if(radius<0.001||radius>100){ obj.scale.setScalar(target/radius); } }
     function fit(obj,pad=1.3){ const {radius}=bounds(obj);
       const fov=camera.fov*Math.PI/180, dist=(radius*pad)/Math.sin(fov/2);
       const dir=new THREE.Vector3(1,0.6,1).normalize();
@@ -82,51 +84,44 @@
       const mat=new THREE.MeshStandardMaterial({color:0xbec7d5,metalness:.15,roughness:.35,side:THREE.DoubleSide});
       obj.traverse(o=>{ if(o.isMesh) o.material=mat; });
     }
+    const exists = async rel => (await fetch(new URL(rel, location.href), {method:'GET'})).ok;
 
-    const load3MF = url => new Promise((res,rej)=> new ThreeMFLoader().load(url,res,undefined,rej));
-    const loadSTL = url => new Promise((res,rej)=> new STLLoader().load(url,g=>{
-      if(!g.hasAttribute('normal')) g.computeVertexNormals(); res(new THREE.Mesh(g)); },undefined,rej));
-
-    async function exists(relPath){
-      const abs = new URL(relPath, document.baseURI).href;
-      const r = await fetch(abs,{method:'GET'});
-      if(!r.ok) return null;
-      return abs;
+    async function load3MF(url){
+      return new Promise((res,rej)=> new ThreeMFLoader().load(url, res, undefined, rej));
     }
-
-    async function loadModel(){
-      // 1) Probeer 3MF
-      let abs = await exists(PRIMARY);
-      if (abs){
-        nameEl.textContent = PRIMARY; setStatus('Laden (3mf)…');
-        const obj = await load3MF(abs);
-        // Fusion 3MF is in millimeters → schaalslag
-        obj.scale.setScalar(0.001);
-        normalizeScale(obj,1.0); centerPivot(obj);
-        return obj;
-      }
-      // 2) Fallback naar STL (alleen als aanwezig)
-      abs = await exists(FALLBACK_STL);
-      if (abs){
-        nameEl.textContent = FALLBACK_STL; setStatus('Laden (stl)…');
-        const obj = await loadSTL(abs);
-        applySTLMat(obj);
-        normalizeScale(obj,1.0); centerPivot(obj);
-        return obj;
-      }
-      throw new Error('Geen model gevonden. Plaats warmtekamer.3mf in /models/');
+    async function loadSTL(url){
+      return new Promise((res,rej)=> new STLLoader().load(url, g=>{
+        if(!g.hasAttribute('normal')) g.computeVertexNormals();
+        res(new THREE.Mesh(g));
+      }, undefined, rej));
     }
 
     (async ()=>{
       try{
-        const obj = await loadModel();
-        root.add(obj);
-        fit(root,1.4);
+        let used = '';
+        if (await exists(PATH_3MF)) {
+          used = PATH_3MF; nameEl.textContent = used; setStatus('Laden (3mf)…');
+          const obj = await load3MF(used);
+          obj.scale.setScalar(0.001);      // Fusion 3MF = millimeters → meters
+          normalizeScale(obj, 1.0);
+          centerPivot(obj);
+          root.add(obj);
+        } else if (await exists(PATH_STL)) {
+          used = PATH_STL; nameEl.textContent = used; setStatus('Laden (stl)…');
+          const obj = await loadSTL(used);
+          applySTLMat(obj);
+          normalizeScale(obj, 1.0);
+          centerPivot(obj);
+          root.add(obj);
+        } else {
+          throw new Error('Geen model gevonden in /models/');
+        }
+        fit(root, 1.4);
         setStatus('Gereed', true);
       }catch(e){
         console.error(e);
         setStatus('FOUT: ' + (e?.message||e), false);
-        // fallback visual zodat het nooit leeg is
+        // visuele fallback
         const m=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),
           new THREE.MeshStandardMaterial({color:0x66aaff,metalness:.2,roughness:.4}));
         root.add(m); fit(root,1.4); (function spin(){ m.rotation.y+=0.01; requestAnimationFrame(spin); })();
