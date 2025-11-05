@@ -1,84 +1,155 @@
 <!doctype html>
 <html lang="nl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Warmtekamer – 3D Viewer (debug)</title>
-  <style>
-    html,body {height:100%; margin:0; background:#0c0f14; color:#e6e6e6; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-    .wrap {position:fixed; inset:0; display:grid; grid-template-rows:auto 1fr}
-    header {padding:10px 14px; backdrop-filter: blur(6px); background:rgba(12,15,20,.6); border-bottom:1px solid rgba(255,255,255,.08); display:flex; gap:10px; align-items:center; flex-wrap:wrap}
-    header code {background:#101420; padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,.08)}
-    .ok {color:#9cffac} .bad {color:#ff9c9c}
-    .viewer {width:100%; height:100%}
-    .hint {position:fixed; left:16px; bottom:16px; font-size:12px; color:#a9b7d9; opacity:.9}
-    button {background:#1a2131; color:#e6eefc; border:1px solid #2b3a58; border-radius:8px; padding:6px 10px; cursor:pointer}
-  </style>
-  <script src="https://www.viewstl.com/plugin/viewstl.js"></script>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>STL Fixer (client-side)</title>
+<style>
+  html,body{height:100%;margin:0;background:#0c0f14;color:#e6e6e6;font-family:system-ui,Segoe UI,Roboto,Arial}
+  .wrap{display:grid;grid-template-rows:auto 1fr; height:100%}
+  header{padding:12px 16px; background:rgba(255,255,255,.05); border-bottom:1px solid rgba(255,255,255,.08); display:flex; gap:12px; align-items:center}
+  main{display:grid; grid-template-columns:320px 1fr; gap:0; height:100%}
+  aside{border-right:1px solid rgba(255,255,255,.08); padding:14px}
+  .drop{border:2px dashed #3d5a98; border-radius:12px; padding:18px; text-align:center; color:#cfe1ff}
+  label{display:block; margin:10px 0 4px; font-size:12px; color:#a9b7d9}
+  input[type="checkbox"]{transform:scale(1.1); margin-right:6px}
+  button{background:#1a2131;color:#e6eefc;border:1px solid #2b3a58;border-radius:8px;padding:8px 12px;cursor:pointer}
+  #viewer{height:100%;width:100%}
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div>Probeert te laden van: <code id="pathShow"></code></div>
-      <div>Status: <span id="status">…</span></div>
-      <a id="directLink" target="_blank" style="margin-left:auto; font-size:12px; color:#9cc0ff">Open model direct ↗</a>
-      <button id="resetBtn" title="Reset view">Reset view</button>
-      <button id="wireBtn" title="Wireframe">Wireframe</button>
-    </header>
+<div class="wrap">
+  <header><strong>STL Fixer (lokale client-side tool)</strong><span id="status"></span></header>
+  <main>
+    <aside>
+      <div class="drop" id="drop">Sleep je STL hierheen of klik om te kiezen</div>
+      <div style="margin-top:12px">
+        <label><input type="checkbox" id="scaleMM"> Schaal van millimeter → meter (×0.001)</label>
+        <label><input type="checkbox" id="doubleSide"> Materiaal dubbelzijdig (handig bij “inside-out”)</label>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <button id="downloadGLB" disabled>Download als GLB</button>
+        <button id="reset" disabled>Reset view</button>
+        <button id="wire" disabled>Wireframe</button>
+      </div>
+      <p style="font-size:12px;color:#a9b7d9;margin-top:12px">
+        Alles draait in je browser. Geen upload naar servers. Ideaal voor schoolprojecten.
+      </p>
+    </aside>
+    <div id="viewer"></div>
+  </main>
+</div>
 
-    <div id="viewer" class="viewstl viewer"
-         data-src=""
-         data-smooth="1"
-         data-rotate="true"
-         data-zoom="true"
-         data-pan="true"
-         data-grid="false"
-         data-background="#0c0f14"
-         data-color="#bec7d5"
-         data-metalness="0.15"
-         data-roughness="0.35">
-    </div>
-  </div>
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.160.1/build/three.module.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js';
+import { STLLoader }    from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/STLLoader.js';
+import { GLTFExporter } from 'https://unpkg.com/three@0.160.1/examples/jsm/exporters/GLTFExporter.js';
 
-  <div class="hint">Sleep = draaien · Scroll = zoomen · Rechtsklik = pannen</div>
+const statusEl = document.getElementById('status');
+const viewerEl = document.getElementById('viewer');
+const scaleMM = document.getElementById('scaleMM');
+const doubleSide = document.getElementById('doubleSide');
+const btnGLB = document.getElementById('downloadGLB');
+const btnReset = document.getElementById('reset');
+const btnWire = document.getElementById('wire');
 
-  <script>
-    // Zet hier je bestandsnaam. Let op: hoofd/kleine letters!
-    const MODEL_RELATIVE = 'models/warmtekamer.stl';
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(viewerEl.clientWidth, viewerEl.clientHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+viewerEl.appendChild(renderer.domElement);
 
-    // Resolve naar een absolute URL vanaf je Pages site
-    const modelURL = new URL(MODEL_RELATIVE, location.href).href;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0f14);
+const camera = new THREE.PerspectiveCamera(55, viewerEl.clientWidth/viewerEl.clientHeight, 0.001, 10000);
+camera.position.set(2.5,1.6,2.5);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
 
-    // Toon pad + link
-    document.getElementById('pathShow').textContent = MODEL_RELATIVE + '  →  ' + modelURL;
-    document.getElementById('directLink').href = modelURL;
+const hemi = new THREE.HemisphereLight(0xffffff,0x222233,0.7); scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff,0.8); dir.position.set(5,8,4); scene.add(dir);
 
-    // Laat ViewSTL het model gebruiken
-    const v = document.getElementById('viewer');
-    v.setAttribute('data-src', modelURL);
+const root = new THREE.Group(); scene.add(root);
+let currentMesh=null, wire=false;
 
-    // Kleine HEAD/GET check om te zien of het bestand echt bereikbaar is
-    (async () => {
-      const statusEl = document.getElementById('status');
-      try {
-        // Sommige hosts blokkeren HEAD; dan doen we een GET met {method:'GET'}
-        const res = await fetch(modelURL, { method: 'GET' });
-        const ok = res.ok;
-        statusEl.textContent = ok ? `OK (${res.status})` : `Niet OK (${res.status})`;
-        statusEl.className = ok ? 'ok' : 'bad';
-      } catch (e) {
-        statusEl.textContent = 'Fetch error';
-        statusEl.className = 'bad';
-        console.error(e);
-      }
-    })();
+function fit(obj,pad=1.3){
+  const box=new THREE.Box3().setFromObject(obj);
+  const size=new THREE.Vector3(); const center=new THREE.Vector3();
+  box.getSize(size); box.getCenter(center);
+  const radius=Math.max(size.x,size.y,size.z)*0.5||1;
+  controls.target.copy(center);
+  const dist=(radius*pad)/Math.sin((camera.fov*Math.PI/180)/2);
+  camera.position.copy(center).add(new THREE.Vector3(1,0.6,1).normalize().multiplyScalar(dist));
+  camera.near=Math.max(dist/1000,0.001); camera.far=dist*50+radius*10; camera.updateProjectionMatrix();
+}
 
-    // Knoppen
-    document.getElementById('resetBtn').onclick = () => document.querySelector('.viewstl').resetView?.();
-    document.getElementById('wireBtn').onclick  = () => document.querySelector('.viewstl').toggleWireframe?.();
+function applyMat(mesh){
+  const mat=new THREE.MeshStandardMaterial({
+    color:0xbec7d5, metalness:0.15, roughness:0.35,
+    side: doubleSide.checked ? THREE.DoubleSide : THREE.FrontSide
+  });
+  mesh.material=mat;
+}
 
-    // Extra: log viewer errors in console (mocht iets misgaan)
-    window.addEventListener('error', (e) => console.log('Window error:', e.message));
-  </script>
+function clearRoot(){ while(root.children.length) root.remove(root.children[0]); }
+
+function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); }
+animate();
+
+window.addEventListener('resize', ()=>{
+  camera.aspect=viewerEl.clientWidth/viewerEl.clientHeight; camera.updateProjectionMatrix();
+  renderer.setSize(viewerEl.clientWidth, viewerEl.clientHeight);
+});
+
+async function loadSTLFromFile(file){
+  statusEl.textContent = ` – laden: ${file.name}`;
+  const buf = await file.arrayBuffer();
+  const geom = new STLLoader().parse(buf);
+  if(!geom.hasAttribute('normal')) geom.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geom);
+  applyMat(mesh);
+  clearRoot(); root.add(mesh); currentMesh = mesh;
+
+  // units
+  if (scaleMM.checked) mesh.scale.setScalar(0.001);
+
+  // center
+  const box=new THREE.Box3().setFromObject(root); const c=new THREE.Vector3(); box.getCenter(c);
+  root.position.sub(c);
+
+  fit(root,1.4);
+  btnGLB.disabled = btnReset.disabled = btnWire.disabled = false;
+  statusEl.textContent = ' – klaar';
+}
+
+document.getElementById('drop').addEventListener('click',()=>{
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='.stl';
+  inp.onchange=()=> inp.files[0] && loadSTLFromFile(inp.files[0]);
+  inp.click();
+});
+
+document.getElementById('drop').addEventListener('dragover',e=>{e.preventDefault();});
+document.getElementById('drop').addEventListener('drop',e=>{
+  e.preventDefault(); const f=e.dataTransfer.files?.[0]; if(f) loadSTLFromFile(f);
+});
+
+btnReset.onclick=()=> fit(root,1.2);
+btnWire.onclick =()=>{
+  wire=!wire;
+  root.traverse(o=>{ if(o.isMesh && o.material){ o.material.wireframe = wire; }});
+};
+doubleSide.onchange =()=> { if(currentMesh) applyMat(currentMesh); };
+
+btnGLB.onclick = ()=>{
+  const exporter = new GLTFExporter();
+  exporter.parse(scene, (glb)=>{
+    const blob = new Blob([glb], {type:'model/gltf-binary'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='fixed.glb'; a.click();
+    URL.revokeObjectURL(a.href);
+  }, {binary:true, onlyVisible:true, trs:false, includeCustomExtensions:false});
+};
+</script>
 </body>
 </html>
