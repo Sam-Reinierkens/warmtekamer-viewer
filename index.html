@@ -18,7 +18,7 @@
 </head>
 <body>
   <div id="app"></div>
-  <div class="topbar">Model: <code id="modelName"></code> • Status: <span id="status">init…</span></div>
+  <div class="topbar">Model: <code id="modelName">—</code> • Status: <span id="status">init…</span></div>
   <div class="btns">
     <button id="fitBtn">Fit</button>
     <button id="wireBtn">Wireframe</button>
@@ -26,18 +26,20 @@
   <div class="hint">Sleep = draaien · Scroll = zoomen · Rechtsklik = pannen</div>
 
   <script type="module">
-    // ======= CONFIG =======
-    // Je repo lijkt de map-structuur te hebben: /index.html en /warmtekamer-viewer/models/...
-    // Daarom wijzen we standaard naar dit pad. Als je 'models/' naast index.html zet,
-    // verander dit dan naar 'models/warmtekamer.3mf'.
-    const DEFAULT_MODEL = 'warmtekamer-viewer/models/warmtekamer.3mf';
-    // ======================
+    // === Kandidaten (je hoeft niets te wijzigen) ===
+    const CANDIDATES = [
+      'warmtekamer-viewer/models/warmtekamer.3mf',
+      'warmtekamer-viewer/models/warmtekamer.glb',
+      'warmtekamer-viewer/models/warmtekamer.stl',
+      'models/warmtekamer.3mf',
+      'models/warmtekamer.glb',
+      'models/warmtekamer.stl',
+    ];
 
     const statusEl = document.getElementById('status');
     const nameEl   = document.getElementById('modelName');
-    nameEl.textContent = DEFAULT_MODEL;
 
-    // === Three.js imports
+    // Imports
     import * as THREE from 'https://unpkg.com/three@0.160.1/build/three.module.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js';
     import { RoomEnvironment } from 'https://unpkg.com/three@0.160.1/examples/jsm/environments/RoomEnvironment.js';
@@ -46,7 +48,7 @@
     import { GLTFLoader }    from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/GLTFLoader.js';
     import { DRACOLoader }   from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/DRACOLoader.js';
 
-    // === Renderer/scene/camera
+    // Renderer/scene/camera
     const container = document.getElementById('app');
     const renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
@@ -71,107 +73,98 @@
     const root = new THREE.Group(); scene.add(root);
     let wire = false;
 
-    // === Helpers
-    function setStatus(txt, ok=true){ statusEl.textContent = txt; statusEl.className = ok ? 'ok' : 'bad'; }
-    function bounds(obj){
-      const b=new THREE.Box3().setFromObject(obj);
+    // Helpers
+    const setStatus = (t, ok=true)=>{ statusEl.textContent=t; statusEl.className=ok?'ok':'bad'; };
+    function bounds(obj){ const b=new THREE.Box3().setFromObject(obj);
       const s=new THREE.Vector3(), c=new THREE.Vector3(); b.getSize(s); b.getCenter(c);
-      return {b,size:s,center:c,radius:Math.max(s.x,s.y,s.z)*0.5||1e-6};
-    }
+      return {b,size:s,center:c,radius:Math.max(s.x,s.y,s.z)*0.5||1e-6}; }
     function centerPivot(obj){ const {center}=bounds(obj); obj.position.sub(center); }
-    function normalizeScale(obj,target=1){
-      const {radius}=bounds(obj);
+    function normalizeScale(obj,target=1){ const {radius}=bounds(obj);
       if(!isFinite(radius)||radius===0) return;
-      if(radius<0.001 || radius>100){ const k=target/radius; obj.scale.setScalar(k); }
-    }
-    function fit(obj,pad=1.3){
-      const {radius}=bounds(obj);
-      const fov = camera.fov*Math.PI/180;
-      const dist = (radius*pad)/Math.sin(fov/2);
-      const dir = new THREE.Vector3(1,0.6,1).normalize();
-      const c = new THREE.Vector3(); new THREE.Box3().setFromObject(obj).getCenter(c);
-      controls.target.copy(c);
-      camera.position.copy(c).addScaledVector(dir, dist);
-      camera.near=Math.max(dist/1000,0.001); camera.far=dist*50+radius*10; camera.updateProjectionMatrix();
-    }
+      if(radius<0.001||radius>100){ const k=target/radius; obj.scale.setScalar(k); } }
+    function fit(obj,pad=1.3){ const {radius}=bounds(obj);
+      const fov=camera.fov*Math.PI/180, dist=(radius*pad)/Math.sin(fov/2);
+      const dir=new THREE.Vector3(1,0.6,1).normalize();
+      const c=new THREE.Vector3(); new THREE.Box3().setFromObject(obj).getCenter(c);
+      controls.target.copy(c); camera.position.copy(c).addScaledVector(dir,dist);
+      camera.near=Math.max(dist/1000,0.001); camera.far=dist*50+radius*10; camera.updateProjectionMatrix(); }
     function applyDefaultMat(obj){
-      const mat = new THREE.MeshStandardMaterial({ color:0xbec7d5, metalness:0.15, roughness:0.35, side:THREE.DoubleSide });
-      obj.traverse(o=>{ if(o.isMesh) o.material = mat; });
-    }
-    function guessUnits(obj, ext){
-      // 3MF vanuit Fusion = mm → schaal 0.001
-      if(ext==='3mf'){ obj.scale.setScalar(0.001); return; }
+      const mat=new THREE.MeshStandardMaterial({color:0xbec7d5,metalness:.15,roughness:.35,side:THREE.DoubleSide});
+      obj.traverse(o=>{ if(o.isMesh) o.material=mat; });
     }
 
-    // === Loaders
-    async function load3MF(url){ return new Promise((res,rej)=> new ThreeMFLoader().load(url, res, undefined, rej)); }
-    async function loadSTL(url){ 
-      return new Promise((res,rej)=> new STLLoader().load(url, g=>{
-        if(!g.hasAttribute('normal')) g.computeVertexNormals();
-        res(new THREE.Mesh(g));
-      }, undefined, rej));
-    }
-    async function loadGLB(url){
-      const gltf = new GLTFLoader(); const draco=new DRACOLoader();
+    // Loaders
+    const load3MF = url => new Promise((res,rej)=> new ThreeMFLoader().load(url,res,undefined,rej));
+    const loadSTL = url => new Promise((res,rej)=> new STLLoader().load(url,g=>{
+      if(!g.hasAttribute('normal')) g.computeVertexNormals(); res(new THREE.Mesh(g)); },undefined,rej));
+    const loadGLB = url => {
+      const gltf=new GLTFLoader(), draco=new DRACOLoader();
       draco.setDecoderPath('https://unpkg.com/three@0.160.1/examples/jsm/libs/draco/');
       gltf.setDRACOLoader(draco);
-      return new Promise((res,rej)=> gltf.load(url, s=>res(s.scene), undefined, rej));
+      return new Promise((res,rej)=> gltf.load(url, s=>res(s.scene),undefined,rej));
+    };
+
+    async function tryFetch(url){
+      const abs = new URL(url, location.href).href;
+      const r = await fetch(abs,{method:'GET'}); if(!r.ok) throw new Error(String(r.status));
+      return abs;
     }
 
-    async function loadModel(url){
-      const ext = url.split('.').pop().toLowerCase();
-      setStatus('Laden…');
+    async function findFirstExisting(candidates){
+      for(const rel of candidates){
+        try{ const abs = await tryFetch(rel); return {abs, rel}; } catch(e){ /* try next */ }
+      }
+      throw new Error('Geen model gevonden op de bekende paden.');
+    }
+
+    async function loadModel(absUrl){
+      const ext = absUrl.split('.').pop().toLowerCase();
+      setStatus(`Laden (${ext})…`);
       let obj;
-      if(ext==='3mf') obj = await load3MF(url);
-      else if(ext==='stl') obj = await loadSTL(url);
-      else if(ext==='glb' || ext==='gltf') obj = await loadGLB(url);
-      else throw new Error('Niet-ondersteund type (gebruik .3mf / .stl / .glb)');
-      if(ext==='stl') applyDefaultMat(obj);
-      guessUnits(obj, ext);
+      if(ext==='3mf'){ obj = await load3MF(absUrl); obj.scale.setScalar(0.001); } // Fusion 3MF = mm
+      else if(ext==='glb'||ext==='gltf'){ obj = await loadGLB(absUrl); }
+      else if(ext==='stl'){ obj = await loadSTL(absUrl); applyDefaultMat(obj); }
+      else throw new Error('Niet-ondersteund type');
       normalizeScale(obj, 1.0);
       centerPivot(obj);
       return obj;
     }
 
-    function showFallbackCube(){
+    function showFallback(){
       const geo=new THREE.BoxGeometry(1,1,1);
-      const mat=new THREE.MeshStandardMaterial({color:0x66aaff, metalness:.2, roughness:.4});
-      const m=new THREE.Mesh(geo,mat);
-      const grp=new THREE.Group(); grp.add(m);
-      root.add(grp);
-      centerPivot(root); fit(root,1.4);
-      (function spin(){ m.rotation.y += 0.01; requestAnimationFrame(spin); })();
+      const mat=new THREE.MeshStandardMaterial({color:0x66aaff,metalness:.2,roughness:.4});
+      const m=new THREE.Mesh(geo,mat); root.add(m); fit(root,1.4);
+      (function spin(){ m.rotation.y+=0.01; requestAnimationFrame(spin); })();
     }
 
     (async ()=>{
       try{
-        const abs = new URL(DEFAULT_MODEL, location.href).href;
-        nameEl.textContent = abs;
-        const head = await fetch(abs, {method:'GET'});
-        if(!head.ok) throw new Error(`Kan model niet bereiken (${head.status})`);
+        const {abs, rel} = await findFirstExisting(CANDIDATES);
+        nameEl.textContent = rel;
         const obj = await loadModel(abs);
         root.add(obj);
         fit(root,1.4);
         setStatus('Gereed', true);
       }catch(e){
         console.error(e);
+        nameEl.textContent = '—';
         setStatus('FOUT: ' + (e?.message||e), false);
-        showFallbackCube();
+        showFallback();
       }
     })();
 
-    document.getElementById('fitBtn').onclick  = ()=> fit(root,1.2);
-    document.getElementById('wireBtn').onclick = ()=>{
-      wire=!wire; root.traverse(o=>{ if(o.isMesh && o.material) o.material.wireframe = wire; });
+    // UI & render
+    document.getElementById('fitBtn').onclick = ()=> fit(root,1.2);
+    document.getElementById('wireBtn').onclick= ()=>{
+      wire=!wire; root.traverse(o=>{ if(o.isMesh&&o.material) o.material.wireframe=wire; });
     };
-
     addEventListener('resize', ()=>{
-      camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth, innerHeight);
+      camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth,innerHeight);
     });
     (function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); })();
 
-    addEventListener('error', (e)=> setStatus('JS error: ' + e.message, false));
+    addEventListener('error', e=> setStatus('JS error: '+e.message,false));
   </script>
 </body>
 </html>
